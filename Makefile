@@ -134,24 +134,13 @@ else
 	ICON_ARG := --icon=$(TOPDIR)/icon.jpg
 endif
 
-ifeq (,$(wildcard $(TOPDIR)/nacp.ini))
-	NACP_ARG :=
-else
-	NACP_ARG := --nacp=$(OUTPUT).nacp
-endif
-
-$(OUTPUT).nro	:	$(OUTPUT).elf $(OUTPUT).nacp
+$(OUTPUT).nro	:	$(OUTPUT).elf
 	@echo building $(notdir $@)
-	$(SILENTCMD)elf2nro $(OUTPUT).elf $(OUTPUT).nro $(ICON_ARG) $(NACP_ARG) --romfsdir=$(TOPDIR)/$(ROMFS)
+	elf2nro $(OUTPUT).elf $(OUTPUT).nro $(ICON_ARG) --romfsdir=$(TOPDIR)/$(ROMFS)
 
 $(OUTPUT).elf	:	$(OFILES)
 	@echo linking $(notdir $@)
-	$(SILENTLD)$(LD) $(LDFLAGS) $(OFILES) $(LIBPATHS) $(LIBS) -o $@
-	@$(NM) -S --size-sort $@ > $(OUTPUT).map
-
-$(OUTPUT).nacp :
-	@echo creating $(notdir $@)
-	$(SILENTCMD)nacptool --create "$(TARGET)" "homebrew" "0.1.0" $@ > /dev/null
+	$(LD) $(LDFLAGS) $(OFILES) $(LIBPATHS) $(LIBS) -o $@
 
 #---------------------------------------------------------------------------------
 # you need a rule like this for each extension you use as binary data
