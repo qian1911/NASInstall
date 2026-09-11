@@ -16,7 +16,7 @@ jobs:
     
     - name: Install dependencies
       run: |
-        dkp-pacman -Sy --noconfirm switch-sdl2 switch-sdl2-ttf switch-freetype switch-curl switch-mbedtls switch-png switch-jpeg switch-zlib
+        dkp-pacman -Sy --noconfirm switch-sdl2 switch-sdl2_ttf switch-freetype switch-curl switch-mbedtls switch-libpng switch-libjpeg-turbo switch-zlib
     
     - name: Build
       run: |
