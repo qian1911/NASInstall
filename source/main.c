@@ -1,466 +1,383 @@
-/*
- * NASInstall - Switch NAS Game Installer
- * Minimal version with HTTP support and NSP installation
- */
-
-#include <stdio.h>
-#include <stdlib.h>
-#include <string.h>
-#include <strings.h>
-#include <switch.h>
-
 #include "types.h"
 #include "ui.h"
+#include "discover.h"
 #include "http.h"
 #include "install.h"
 #include "config.h"
+#include <switch.h>
+#include <SDL2/SDL.h>
+#include <SDL2/SDL_ttf.h>
+#include <stdio.h>
+#include <string.h>
+#include <strings.h>
 
-#define APP_TITLE  "NASInstall"
-#define APP_VERSION "0.1.0"
+#define APP_TITLE "NASInstall"
+#define APP_VERSION "2.0.0"
 
-// Key mappings for libnx 4.x
-#define KEY_A       HidNpadButton_A
-#define KEY_B       HidNpadButton_B
-#define KEY_X       HidNpadButton_X
-#define KEY_Y       HidNpadButton_Y
-#define KEY_UP      HidNpadButton_Up
-#define KEY_DOWN    HidNpadButton_Down
-#define KEY_LEFT    HidNpadButton_Left
-#define KEY_RIGHT   HidNpadButton_Right
-#define KEY_PLUS    HidNpadButton_Plus
-#define KEY_MINUS   HidNpadButton_Minus
-#define KEY_R       HidNpadButton_R
-#define KEY_L       HidNpadButton_L
+static void draw_scan(AppContext* app) {
+    UIContext* ctx = &app->ui;
+    ui_clear(ctx, COL_BG);
+    ui_top_bar(ctx, "Scanning Network", "Searching for NAS devices...");
 
-// Global state
-static AppState g_state = STATE_MAIN_MENU;
-static char g_server_url[512] = {0};
-static HttpFileList g_file_list = {0};
-static int g_selected_idx = 0;
-static int g_scroll_offset = 0;
-static InstallTask g_install_task = {0};
-static bool g_exit = false;
+    int cx = SCREEN_WIDTH / 2;
+    int cy = SCREEN_HEIGHT / 2 - 40;
 
-// Saved servers
-#define MAX_SAVED_SERVERS 10
-static SavedServer g_saved_servers[MAX_SAVED_SERVERS];
-static int g_saved_servers_count = 0;
-static int g_selected_server = 0;
-
-static void init(void) {
-    consoleInit(NULL);
-    socketInitializeDefault();
-    nsInitialize();
-    ncmInitialize();
-    psmInitialize();
-
-    config_load();
-    g_saved_servers_count = config_get_servers(g_saved_servers, MAX_SAVED_SERVERS);
-
-    if (g_saved_servers_count > 0) {
-        strncpy(g_server_url, g_saved_servers[0].url, sizeof(g_server_url) - 1);
-    } else {
-        strncpy(g_server_url, "http://192.168.1.100:8080", sizeof(g_server_url) - 1);
-    }
-}
-
-static void cleanup(void) {
-    if (g_saved_servers_count > 0) {
-        config_save_servers(g_saved_servers, g_saved_servers_count);
+    // Animated scan circle
+    int r = 40 + (app->scan_progress % 30);
+    set_color(ctx, COL_ACCENT);
+    for (int i = 0; i < 360; i += 5) {
+        float rad = i * 3.14159f / 180.0f;
+        int x = cx + (int)(r * cosf(rad));
+        int y = cy + (int)(r * sinf(rad));
+        SDL_Rect dot = {x - 2, y - 2, 4, 4};
+        SDL_RenderFillRect(ctx->renderer, &dot);
     }
 
-    http_free_file_list(&g_file_list);
-    install_cleanup(&g_install_task);
+    ui_draw_text_centered(ctx, "Scanning local network...", 0, cy + 80, SCREEN_WIDTH, 18, COL_TEXT_DIM);
+    char progress[64];
+    snprintf(progress, sizeof(progress), "%d / 254 IPs checked", app->scan_progress);
+    ui_draw_text_centered(ctx, progress, 0, cy + 110, SCREEN_WIDTH, 14, COL_TEXT_DIM);
 
-    psmExit();
-    ncmExit();
-    nsExit();
-    socketExit();
-    consoleExit(NULL);
+    // Progress bar
+    UIRect pb = {cx - 200, cy + 150, 400, 8};
+    ui_progress_bar(ctx, pb, (float)app->scan_progress / 254.0f);
+
+    ui_bottom_bar(ctx, "B=Cancel");
+    ui_present(ctx);
 }
 
-static void draw_main_menu(void) {
-    consoleClear();
-    ui_draw_header(APP_TITLE " v" APP_VERSION, "NAS Game Installer");
+static void draw_server_list(AppContext* app) {
+    UIContext* ctx = &app->ui;
+    ui_clear(ctx, COL_BG);
+    ui_top_bar(ctx, "NAS Servers", app->server_count > 0 ? "" : "No servers found");
 
-    int y = 5;
-    ui_draw_menu_item(y++, 0, g_selected_idx == 0, "Browse HTTP Server");
-    ui_draw_menu_item(y++, 0, g_selected_idx == 1, "Saved Servers");
-    ui_draw_menu_item(y++, 0, g_selected_idx == 2, "Add New Server");
-    ui_draw_menu_item(y++, 0, g_selected_idx == 3, "Settings");
-    ui_draw_menu_item(y++, 0, g_selected_idx == 4, "About");
+    int y_start = TOP_BAR_H + 20;
+    int card_w = SCREEN_WIDTH - 2 * PADDING;
+    int card_h = 80;
+    int visible = (SCREEN_HEIGHT - BOT_BAR_H - y_start - 40) / (card_h + 10);
 
-    printf("\n\n");
-    ui_draw_status_bar("A=Select  B=Exit  +/-=Navigate");
-}
-
-static void draw_server_list(void) {
-    consoleClear();
-    ui_draw_header("Saved Servers", "Select a server to connect");
-
-    if (g_saved_servers_count == 0) {
-        printf("\n\n    No saved servers yet.\n");
-        printf("    Go to 'Add New Server' to add one.\n");
+    if (app->server_count == 0) {
+        ui_draw_text_centered(ctx, "No NAS devices found", 0, SCREEN_HEIGHT / 2 - 20, SCREEN_WIDTH, 24, COL_TEXT_DIM);
+        ui_draw_text_centered(ctx, "Press Y to scan network again", 0, SCREEN_HEIGHT / 2 + 20, SCREEN_WIDTH, 18, COL_TEXT_DIM);
     } else {
-        int y = 4;
-        for (int i = 0; i < g_saved_servers_count && i < 20; i++) {
-            ui_draw_menu_item(y + i, i, g_selected_server == i, g_saved_servers[i].name);
-            printf("          %s\n", g_saved_servers[i].url);
+        for (int i = 0; i < visible && i + app->scroll_offset < app->server_count; i++) {
+            int idx = i + app->scroll_offset;
+            SavedServer* s = &app->servers[idx];
+            bool sel = (idx == app->selected_server);
+            char subtitle[128];
+            snprintf(subtitle, sizeof(subtitle), "%s  Port: %d", s->ip, s->port);
+            ui_card(ctx, (UIRect){PADDING, y_start + i * (card_h + 10), card_w, card_h},
+                    s->name, subtitle, s->online ? "Online" : NULL, sel);
         }
     }
 
-    ui_draw_status_bar("A=Connect  X=Delete  B=Back");
+    ui_bottom_bar(ctx, "A=Connect  Y=Scan  X=Add Manually  B=Back");
+    ui_present(ctx);
 }
 
-static void draw_file_browser(void) {
-    consoleClear();
-    ui_draw_header("File Browser", g_server_url);
+static void draw_file_browser(AppContext* app) {
+    UIContext* ctx = &app->ui;
+    ui_clear(ctx, COL_BG);
+    ui_top_bar(ctx, "File Browser", app->current_url);
 
-    if (g_file_list.count == 0) {
-        printf("\n\n    Loading... or no files found\n");
+    int y_start = TOP_BAR_H + 20;
+    int card_w = SCREEN_WIDTH - 2 * PADDING;
+    int card_h = 60;
+    int visible = (SCREEN_HEIGHT - BOT_BAR_H - y_start - 10) / (card_h + 6);
+
+    if (app->file_count == 0) {
+        ui_draw_text_centered(ctx, "Loading or no files found", 0, SCREEN_HEIGHT / 2, SCREEN_WIDTH, 18, COL_TEXT_DIM);
     } else {
-        int visible_count = 25;
-        int start = g_scroll_offset;
-        int end = start + visible_count;
-        if (end > g_file_list.count) end = g_file_list.count;
+        for (int i = 0; i < visible && i + app->scroll_offset < app->file_count; i++) {
+            int idx = i + app->scroll_offset;
+            FileEntry* e = &app->files[idx];
+            bool sel = (idx == app->selected_file);
 
-        for (int i = start; i < end; i++) {
-            int display_idx = i - start + 4;
-            bool selected = (i == g_selected_idx);
-            char size_str[64];
-            format_size(g_file_list.files[i].size, size_str, sizeof(size_str));
+            u32 bg = sel ? COL_CARD_HL : COL_CARD;
+            if (sel) ui_fill_rounded_rect(ctx, PADDING - 2, y_start + i * (card_h + 6) - 2, card_w + 4, card_h + 4, 12, COL_ACCENT_D);
+            ui_fill_rounded_rect(ctx, PADDING, y_start + i * (card_h + 6), card_w, card_h, 10, bg);
 
-            if (g_file_list.files[i].is_dir) {
-                ui_draw_menu_item(display_idx, i, selected,
-                    va("[DIR]  %s", g_file_list.files[i].name));
-            } else {
-                const char* ext = strrchr(g_file_list.files[i].name, '.');
-                if (ext && (strcasecmp(ext, ".nsp") == 0 || strcasecmp(ext, ".nsz") == 0 ||
-                           strcasecmp(ext, ".xci") == 0 || strcasecmp(ext, ".xcz") == 0)) {
-                    ui_draw_menu_item(display_idx, i, selected,
-                        va("[ROM]  %s", g_file_list.files[i].name));
-                    printf("          %s\n", size_str);
-                } else {
-                    ui_draw_menu_item(display_idx, i, selected,
-                        va("[FILE] %s", g_file_list.files[i].name));
-                    printf("          %s\n", size_str);
-                }
+            // File icon
+            set_color(ctx, e->is_dir ? COL_WARNING : COL_ACCENT);
+            SDL_Rect icon = {PADDING + 16, y_start + i * (card_h + 6) + 20, 24, 24};
+            SDL_RenderFillRect(ctx->renderer, &icon);
+
+            // Name
+            char display[300];
+            const char* prefix = e->is_dir ? "[DIR]  " : "[FILE] ";
+            snprintf(display, sizeof(display), "%s%s", prefix, e->name);
+            ui_draw_text(ctx, display, PADDING + 52, y_start + i * (card_h + 6) + 18, 18, COL_TEXT);
+
+            if (!e->is_dir) {
+                char sz[32];
+                format_size(e->size, sz, sizeof(sz));
+                ui_draw_text(ctx, sz, PADDING + 52, y_start + i * (card_h + 6) + 40, 14, COL_TEXT_DIM);
             }
         }
 
-        if (g_file_list.count > visible_count) {
-            printf("\n    %d / %d files", g_selected_idx + 1, g_file_list.count);
+        // Scroll indicator
+        if (app->file_count > visible) {
+            char info[64];
+            snprintf(info, sizeof(info), "%d / %d files", app->selected_file + 1, app->file_count);
+            ui_draw_text(ctx, info, SCREEN_WIDTH - 150, SCREEN_HEIGHT - BOT_BAR_H - 30, 14, COL_TEXT_DIM);
         }
     }
 
-    ui_draw_status_bar("A=Open/Install  B=Back  Y=Refresh  L/R=Page");
+    ui_bottom_bar(ctx, "A=Open/Install  B=Back  Y=Refresh  L/R=Page");
+    ui_present(ctx);
 }
 
-static void draw_install_progress(void) {
-    consoleClear();
-    ui_draw_header("Installing...", g_install_task.filename);
+static void draw_install(AppContext* app) {
+    UIContext* ctx = &app->ui;
+    ui_clear(ctx, COL_BG);
+    ui_top_bar(ctx, "Installing", app->install.filename);
 
-    printf("\n\n");
+    int cx = SCREEN_WIDTH / 2;
+    int cy = SCREEN_HEIGHT / 2 - 40;
 
-    if (g_install_task.status == INSTALL_STATUS_DOWNLOADING) {
-        printf("  Stage: Downloading NCA data\n\n");
-    } else if (g_install_task.status == INSTALL_STATUS_INSTALLING) {
-        printf("  Stage: Installing to system\n\n");
-    } else if (g_install_task.status == INSTALL_STATUS_DONE) {
-        printf("  Stage: Complete!\n\n");
-    } else if (g_install_task.status == INSTALL_STATUS_ERROR) {
-        printf("  Stage: ERROR\n\n");
-        printf("  Error: %s\n", g_install_task.error_msg);
+    // Status text
+    const char* stage = "Idle";
+    u32 stage_color = COL_TEXT_DIM;
+    switch (app->install.status) {
+        case INSTALL_DOWNLOADING: stage = "Downloading..."; stage_color = COL_ACCENT; break;
+        case INSTALLING: stage = "Installing..."; stage_color = COL_WARNING; break;
+        case INSTALL_DONE: stage = "Complete!"; stage_color = COL_SUCCESS; break;
+        case INSTALL_ERROR: stage = "Error"; stage_color = COL_ERROR; break;
     }
+    ui_draw_text_centered(ctx, stage, 0, cy - 60, SCREEN_WIDTH, 28, stage_color);
 
-    int bar_width = 50;
-    float progress = g_install_task.progress;
-    int filled = (int)(progress * bar_width);
+    // Progress bar
+    UIRect pb = {cx - 250, cy, 500, 20};
+    ui_progress_bar(ctx, pb, app->install.progress);
 
-    printf("  [");
-    for (int i = 0; i < bar_width; i++) {
-        if (i < filled) {
-            printf("=");
-        } else {
-            printf(" ");
-        }
-    }
-    printf("] %.1f%%\n\n", progress * 100);
+    char pct[32];
+    snprintf(pct, sizeof(pct), "%.1f%%", app->install.progress * 100);
+    ui_draw_text_centered(ctx, pct, 0, cy + 30, SCREEN_WIDTH, 24, COL_TEXT);
 
-    char speed_str[64], total_str[64];
-    format_size(g_install_task.speed, speed_str, sizeof(speed_str));
-    format_size(g_install_task.total_size, total_str, sizeof(total_str));
+    char sz_str[64], total_str[64];
+    format_size(app->install.speed, sz_str, sizeof(sz_str));
+    format_size(app->install.total_size, total_str, sizeof(total_str));
+    char info[256];
+    snprintf(info, sizeof(info), "Speed: %s/s    Total: %s", sz_str, total_str);
+    ui_draw_text_centered(ctx, info, 0, cy + 80, SCREEN_WIDTH, 14, COL_TEXT_DIM);
 
-    printf("  Speed: %s/s\n", speed_str);
-    printf("  Total: %s\n", total_str);
-
-    if (g_install_task.current_file[0]) {
-        printf("  File:  %s\n", g_install_task.current_file);
-    }
-
-    printf("\n\n");
-    ui_draw_status_bar("B=Cancel (if not finalizing)");
+    ui_bottom_bar(ctx, app->install.status == INSTALL_DONE || app->install.status == INSTALL_ERROR ? "B=Back" : "Please wait...");
+    ui_present(ctx);
 }
 
-static void draw_add_server(void) {
-    consoleClear();
-    ui_draw_header("Add New Server", "Enter server details");
-
-    printf("\n\n");
-    printf("  Name: My HTTP Server\n");
-    printf("  URL:  %s\n", g_server_url);
-    printf("\n");
-    printf("  Enter URL using the on-screen keyboard\n");
-    printf("  (press A to edit URL)\n");
-
-    printf("\n\n\n");
-    ui_draw_status_bar("A=Edit URL  X=Save  B=Cancel");
+static void handle_scan(AppContext* app, u64 key) {
+    if (key & HidNpadButton_B) {
+        app->state = STATE_SERVER_LIST;
+    }
 }
 
-static void draw_about(void) {
-    consoleClear();
-    ui_draw_header("About", APP_TITLE " v" APP_VERSION);
-
-    printf("\n\n");
-    printf("  NASInstall - Switch NAS Game Installer\n\n");
-    printf("  A homebrew application for installing Switch\n");
-    printf("  games directly from NAS/HTTP servers.\n\n");
-    printf("  Features:\n");
-    printf("   - HTTP file browsing and installation\n");
-    printf("   - NSP/NSZ/XCI/XCZ format support\n");
-    printf("   - Multiple saved servers\n");
-    printf("   - Resume support (HTTP Range)\n\n");
-    printf("  License: GPLv3\n");
-
-    printf("\n\n\n");
-    ui_draw_status_bar("B=Back");
-}
-
-static void handle_main_menu_input(u64 key) {
-    if (key & KEY_DOWN) {
-        g_selected_idx++;
-        if (g_selected_idx > 4) g_selected_idx = 0;
-    }
-    if (key & KEY_UP) {
-        g_selected_idx--;
-        if (g_selected_idx < 0) g_selected_idx = 4;
-    }
-    if (key & KEY_PLUS) {
-        g_exit = true;
+static void handle_server_list(AppContext* app, u64 key) {
+    if (key & HidNpadButton_Y) {
+        app->state = STATE_SCAN;
+        app->scan_progress = 0;
         return;
     }
-    if (key & KEY_A) {
-        switch (g_selected_idx) {
-            case 0:
-                if (g_saved_servers_count > 0) {
-                    strncpy(g_server_url, g_saved_servers[0].url, sizeof(g_server_url) - 1);
-                }
-                g_state = STATE_FILE_BROWSER;
-                g_selected_idx = 0;
-                g_scroll_offset = 0;
-                http_list_files(g_server_url, "/", &g_file_list);
-                break;
-            case 1:
-                g_state = STATE_SERVER_LIST;
-                g_selected_server = 0;
-                break;
-            case 2:
-                g_state = STATE_ADD_SERVER;
-                break;
-            case 3:
-                break;
-            case 4:
-                g_state = STATE_ABOUT;
-                break;
+    if (key & HidNpadButton_X) {
+        app->state = STATE_ADD_SERVER;
+        return;
+    }
+    if (app->server_count == 0) {
+        if (key & HidNpadButton_B) app->exit_app = true;
+        return;
+    }
+    if (key & HidNpadButton_Down) {
+        if (app->selected_server < app->server_count - 1) {
+            app->selected_server++;
+            if (app->selected_server >= app->scroll_offset + 6)
+                app->scroll_offset = app->selected_server - 5;
         }
     }
+    if (key & HidNpadButton_Up) {
+        if (app->selected_server > 0) {
+            app->selected_server--;
+            if (app->selected_server < app->scroll_offset)
+                app->scroll_offset = app->selected_server;
+        }
+    }
+    if (key & HidNpadButton_A) {
+        strncpy(app->current_url, app->servers[app->selected_server].url, MAX_URL_LEN - 1);
+        strcpy(app->current_path, "/");
+        app->file_count = 0;
+        http_list_files(app->current_url, "/", app->files, &app->file_count, MAX_FILES);
+        app->selected_file = 0;
+        app->scroll_offset = 0;
+        app->state = STATE_FILE_BROWSER;
+    }
+    if (key & HidNpadButton_B) app->exit_app = true;
 }
 
-static void handle_server_list_input(u64 key) {
-    if (key & KEY_DOWN) {
-        g_selected_server++;
-        if (g_selected_server >= g_saved_servers_count) g_selected_server = 0;
+static void handle_file_browser(AppContext* app, u64 key) {
+    if (app->file_count == 0) {
+        if (key & HidNpadButton_B) { app->state = STATE_SERVER_LIST; app->selected_server = 0; }
+        return;
     }
-    if (key & KEY_UP) {
-        g_selected_server--;
-        if (g_selected_server < 0) g_selected_server = g_saved_servers_count - 1;
-    }
-    if (key & KEY_A && g_saved_servers_count > 0) {
-        strncpy(g_server_url, g_saved_servers[g_selected_server].url, sizeof(g_server_url) - 1);
-        g_state = STATE_FILE_BROWSER;
-        g_selected_idx = 0;
-        g_scroll_offset = 0;
-        http_list_files(g_server_url, "/", &g_file_list);
-    }
-    if (key & KEY_B) {
-        g_state = STATE_MAIN_MENU;
-        g_selected_idx = 1;
-    }
-}
-
-static void handle_file_browser_input(u64 key) {
-    if (key & KEY_DOWN) {
-        if (g_selected_idx < g_file_list.count - 1) {
-            g_selected_idx++;
-            if (g_selected_idx >= g_scroll_offset + 25) {
-                g_scroll_offset = g_selected_idx - 24;
-            }
+    if (key & HidNpadButton_Down) {
+        if (app->selected_file < app->file_count - 1) {
+            app->selected_file++;
+            if (app->selected_file >= app->scroll_offset + 8)
+                app->scroll_offset = app->selected_file - 7;
         }
     }
-    if (key & KEY_UP) {
-        if (g_selected_idx > 0) {
-            g_selected_idx--;
-            if (g_selected_idx < g_scroll_offset) {
-                g_scroll_offset = g_selected_idx;
-            }
+    if (key & HidNpadButton_Up) {
+        if (app->selected_file > 0) {
+            app->selected_file--;
+            if (app->selected_file < app->scroll_offset)
+                app->scroll_offset = app->selected_file;
         }
     }
-    if (key & KEY_R) {
-        g_selected_idx += 10;
-        if (g_selected_idx >= g_file_list.count) g_selected_idx = g_file_list.count - 1;
-        g_scroll_offset = g_selected_idx;
+    if (key & HidNpadButton_R) {
+        app->selected_file += 8;
+        if (app->selected_file >= app->file_count) app->selected_file = app->file_count - 1;
+        app->scroll_offset = app->selected_file;
     }
-    if (key & KEY_L) {
-        g_selected_idx -= 10;
-        if (g_selected_idx < 0) g_selected_idx = 0;
-        g_scroll_offset = g_selected_idx;
+    if (key & HidNpadButton_L) {
+        app->selected_file -= 8;
+        if (app->selected_file < 0) app->selected_file = 0;
+        app->scroll_offset = app->selected_file;
     }
-    if (key & KEY_Y) {
-        http_free_file_list(&g_file_list);
-        http_list_files(g_server_url, "/", &g_file_list);
-        g_selected_idx = 0;
-        g_scroll_offset = 0;
+    if (key & HidNpadButton_Y) {
+        app->file_count = 0;
+        http_list_files(app->current_url, app->current_path, app->files, &app->file_count, MAX_FILES);
+        app->selected_file = 0;
+        app->scroll_offset = 0;
     }
-    if (key & KEY_A && g_file_list.count > 0) {
-        HttpFileEntry* entry = &g_file_list.files[g_selected_idx];
-        if (entry->is_dir) {
-            char new_path[512];
-            snprintf(new_path, sizeof(new_path), "/%s", entry->name);
-            http_free_file_list(&g_file_list);
-            http_list_files(g_server_url, new_path, &g_file_list);
-            g_selected_idx = 0;
-            g_scroll_offset = 0;
+    if (key & HidNpadButton_A) {
+        FileEntry* e = &app->files[app->selected_file];
+        if (e->is_dir) {
+            snprintf(app->current_path, MAX_URL_LEN, "%s%s/", app->current_path, e->name);
+            app->file_count = 0;
+            http_list_files(app->current_url, app->current_path, app->files, &app->file_count, MAX_FILES);
+            app->selected_file = 0;
+            app->scroll_offset = 0;
         } else {
-            const char* ext = strrchr(entry->name, '.');
+            const char* ext = strrchr(e->name, '.');
             if (ext && (strcasecmp(ext, ".nsp") == 0 || strcasecmp(ext, ".nsz") == 0)) {
-                char file_url[1024];
-                snprintf(file_url, sizeof(file_url), "%s/%s", g_server_url, entry->name);
-
-                install_init(&g_install_task);
-                install_start_nsp_http(&g_install_task, file_url, entry->name, entry->size);
-                g_state = STATE_INSTALL_PROGRESS;
+                char url[1024];
+                snprintf(url, sizeof(url), "%s%s%s", app->current_url, app->current_path, e->name);
+                install_init(&app->install);
+                install_start(&app->install, url, e->name, e->size);
+                app->state = STATE_INSTALL_PROGRESS;
             }
         }
     }
-    if (key & KEY_B) {
-        http_free_file_list(&g_file_list);
-        g_state = STATE_MAIN_MENU;
-        g_selected_idx = 0;
+    if (key & HidNpadButton_B) {
+        app->state = STATE_SERVER_LIST;
+        app->selected_server = 0;
+        app->scroll_offset = 0;
     }
 }
 
-static void handle_install_progress_input(u64 key) {
-    install_update(&g_install_task);
-
-    if (key & KEY_B) {
-        if (g_install_task.status == INSTALL_STATUS_DONE ||
-            g_install_task.status == INSTALL_STATUS_ERROR) {
-            install_cleanup(&g_install_task);
-            g_state = STATE_FILE_BROWSER;
+static void handle_install(AppContext* app, u64 key) {
+    install_update(&app->install);
+    if (key & HidNpadButton_B) {
+        if (app->install.status == INSTALL_DONE || app->install.status == INSTALL_ERROR) {
+            install_cleanup(&app->install);
+            app->state = STATE_FILE_BROWSER;
         }
-    }
-}
-
-static void handle_add_server_input(u64 key) {
-    if (key & KEY_A) {
-        char input[512] = {0};
-        strncpy(input, g_server_url, sizeof(input) - 1);
-
-        SwkbdConfig kbd;
-        if (R_SUCCEEDED(swkbdCreate(&kbd, 0))) {
-            swkbdConfigMakePresetDefault(&kbd);
-            swkbdConfigSetInitialText(&kbd, input);
-            swkbdConfigSetStringLenMax(&kbd, 511);
-            swkbdConfigSetHeaderText(&kbd, "Enter HTTP Server URL");
-            swkbdConfigSetOkButtonText(&kbd, "Connect");
-            if (R_SUCCEEDED(swkbdShow(&kbd, input, sizeof(input)))) {
-                strncpy(g_server_url, input, sizeof(g_server_url) - 1);
-            }
-            swkbdClose(&kbd);
-        }
-    }
-    if (key & KEY_X) {
-        if (g_saved_servers_count < MAX_SAVED_SERVERS) {
-            strncpy(g_saved_servers[g_saved_servers_count].name, "HTTP Server",
-                    sizeof(g_saved_servers[g_saved_servers_count].name) - 1);
-            strncpy(g_saved_servers[g_saved_servers_count].url, g_server_url,
-                    sizeof(g_saved_servers[g_saved_servers_count].url) - 1);
-            g_saved_servers[g_saved_servers_count].type = SERVER_HTTP;
-            g_saved_servers_count++;
-            config_save_servers(g_saved_servers, g_saved_servers_count);
-        }
-        g_state = STATE_MAIN_MENU;
-        g_selected_idx = 1;
-    }
-    if (key & KEY_B) {
-        g_state = STATE_MAIN_MENU;
-        g_selected_idx = 2;
-    }
-}
-
-static void handle_about_input(u64 key) {
-    if (key & KEY_B) {
-        g_state = STATE_MAIN_MENU;
-        g_selected_idx = 4;
     }
 }
 
 int main(int argc, char* argv[]) {
-    init();
+    AppContext app;
+    memset(&app, 0, sizeof(app));
 
-    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
-    PadState pad;
-    padInitializeDefault(&pad);
-
-    while (appletMainLoop()) {
-        padUpdate(&pad);
-        u64 key = padGetButtonsDown(&pad);
-
-        if (g_exit) break;
-        if (key & KEY_PLUS) break;
-
-        switch (g_state) {
-            case STATE_MAIN_MENU:
-                handle_main_menu_input(key);
-                draw_main_menu();
-                break;
-            case STATE_SERVER_LIST:
-                handle_server_list_input(key);
-                draw_server_list();
-                break;
-            case STATE_FILE_BROWSER:
-                handle_file_browser_input(key);
-                draw_file_browser();
-                break;
-            case STATE_INSTALL_PROGRESS:
-                handle_install_progress_input(key);
-                draw_install_progress();
-                break;
-            case STATE_ADD_SERVER:
-                handle_add_server_input(key);
-                draw_add_server();
-                break;
-            case STATE_ABOUT:
-                handle_about_input(key);
-                draw_about();
-                break;
-            default:
-                break;
-        }
-
+    if (!ui_init(&app.ui)) {
+        consoleInit(NULL);
+        printf("UI init failed!\n");
         consoleUpdate(NULL);
+        svcSleepThread(3000000000);
+        consoleExit(NULL);
+        return 1;
     }
 
-    cleanup();
+    socketInitializeDefault();
+    nsInitialize();
+    ncmInitialize();
+    psmInitialize();
+    curl_global_init(CURL_GLOBAL_DEFAULT);
+
+    config_load(app.servers, &app.server_count, MAX_SERVERS);
+    app.state = STATE_SERVER_LIST;
+    app.selected_server = 0;
+    app.scroll_offset = 0;
+
+    // Auto-scan on first launch if no saved servers
+    if (app.server_count == 0) {
+        app.state = STATE_SCAN;
+    }
+
+    while (appletMainLoop() && !app.exit_app) {
+        u64 key = pad_get_keys(&app.ui.pad);
+
+        if (key & HidNpadButton_Plus) {
+            if (app.state == STATE_SERVER_LIST || app.state == STATE_SCAN) {
+                app.exit_app = true;
+                break;
+            }
+        }
+
+        // Handle scan state (blocking scan)
+        if (app.state == STATE_SCAN) {
+            // Draw scanning animation
+            app.scan_progress = (app.scan_progress + 1) % 255;
+            draw_scan(&app);
+
+            // Do actual scan after a few frames of animation
+            if (app.scan_progress == 254) {
+                app.server_count = discover_scan(app.servers, MAX_SERVERS);
+                // Also load saved servers
+                SavedServer saved[MAX_SERVERS];
+                int saved_count = 0;
+                config_load(saved, &saved_count, MAX_SERVERS);
+                for (int i = 0; i < saved_count && app.server_count < MAX_SERVERS; i++) {
+                    bool found = false;
+                    for (int j = 0; j < app.server_count; j++) {
+                        if (strcmp(app.servers[j].url, saved[i].url) == 0) { found = true; break; }
+                    }
+                    if (!found) app.servers[app.server_count++] = saved[i];
+                }
+                app.state = STATE_SERVER_LIST;
+                app.selected_server = 0;
+                app.scroll_offset = 0;
+            }
+
+            if (key & HidNpadButton_B) {
+                app.state = STATE_SERVER_LIST;
+            }
+            svcSleepThread(10000000); // 10ms
+            continue;
+        }
+
+        switch (app.state) {
+            case STATE_SERVER_LIST:
+                handle_server_list(&app, key);
+                draw_server_list(&app);
+                break;
+            case STATE_FILE_BROWSER:
+                handle_file_browser(&app, key);
+                draw_file_browser(&app);
+                break;
+            case STATE_INSTALL_PROGRESS:
+                handle_install(&app, key);
+                draw_install(&app);
+                break;
+            default:
+                app.state = STATE_SERVER_LIST;
+                break;
+        }
+    }
+
+    config_save(app.servers, app.server_count);
+    curl_global_cleanup();
+    psmExit();
+    ncmExit();
+    nsExit();
+    socketExit();
+    ui_exit(&app.ui);
     return 0;
 }
