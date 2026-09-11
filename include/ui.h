@@ -3,16 +3,16 @@
 
 #include "types.h"
 
-#define COL_BG       0x0D1117
-#define COL_CARD     0x161B22
-#define COL_CARD_HL  0x21262D
-#define COL_ACCENT   0x2F81F7
-#define COL_ACCENT_D 0x1F6FEB
+#define COL_BG       0x1A1A2E
+#define COL_CARD     0x2D2D44
+#define COL_CARD_HL  0x3D3D5C
+#define COL_ACCENT   0x4FC3F7
+#define COL_ACCENT_D 0x29B6F6
 #define COL_TEXT     0xFFFFFF
-#define COL_TEXT_DIM 0x8B949E
-#define COL_SUCCESS  0x3FB950
-#define COL_ERROR    0xF85149
-#define COL_WARNING  0xD29922
+#define COL_TEXT_DIM 0xB0B0C0
+#define COL_SUCCESS  0x66BB6A
+#define COL_ERROR    0xEF5350
+#define COL_WARNING  0xFFCA28
 
 #define TOP_BAR_H    72
 #define BOT_BAR_H    56

@@ -7,31 +7,75 @@
 #include <math.h>
 
 void set_color(UIContext* ctx, u32 c) {
-    SDL_SetRenderDrawColor(ctx->renderer, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF, (c >> 24) & 0xFF ? (c >> 24) & 0xFF : 0xFF);
+    SDL_SetRenderDrawColor(ctx->renderer, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF, 0xFF);
 }
 
 bool ui_init(UIContext* ctx) {
     memset(ctx, 0, sizeof(UIContext));
-    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) < 0) return false;
-    if (TTF_Init() < 0) return false;
-    romfsInit();
-    plInitialize(PlServiceType_User);
 
-    if (SDL_CreateWindowAndRenderer(SCREEN_WIDTH, SCREEN_HEIGHT, SDL_WINDOW_FULLSCREEN, &ctx->window, &ctx->renderer) < 0)
+    if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_JOYSTICK) < 0) {
+        printf("SDL_Init failed: %s\n", SDL_GetError());
         return false;
+    }
+    if (TTF_Init() < 0) {
+        printf("TTF_Init failed: %s\n", TTF_GetError());
+        SDL_Quit();
+        return false;
+    }
+
+    Result rc = plInitialize(PlServiceType_User);
+    if (R_FAILED(rc)) {
+        printf("plInitialize failed: 0x%x\n", rc);
+        TTF_Quit();
+        SDL_Quit();
+        return false;
+    }
+
+    if (SDL_CreateWindowAndRenderer(0, 0, SDL_WINDOW_FULLSCREEN, &ctx->window, &ctx->renderer) < 0) {
+        printf("SDL_CreateWindowAndRenderer failed: %s\n", SDL_GetError());
+        plExit();
+        TTF_Quit();
+        SDL_Quit();
+        return false;
+    }
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
 
     PlFontData font_data;
-    if (R_FAILED(plGetSharedFontByType(&font_data, PlSharedFontType_Standard))) return false;
+    rc = plGetSharedFontByType(&font_data, PlSharedFontType_Standard);
+    if (R_FAILED(rc)) {
+        printf("plGetSharedFontByType failed: 0x%x\n", rc);
+        SDL_DestroyRenderer(ctx->renderer);
+        SDL_DestroyWindow(ctx->window);
+        plExit();
+        TTF_Quit();
+        SDL_Quit();
+        return false;
+    }
 
     ctx->font = TTF_OpenFontRW(SDL_RWFromMem(font_data.address, font_data.size), 0, 18);
     ctx->font_small = TTF_OpenFontRW(SDL_RWFromMem(font_data.address, font_data.size), 0, 14);
     ctx->font_large = TTF_OpenFontRW(SDL_RWFromMem(font_data.address, font_data.size), 0, 24);
-    if (!ctx->font || !ctx->font_small || !ctx->font_large) return false;
+    if (!ctx->font || !ctx->font_small || !ctx->font_large) {
+        printf("TTF_OpenFontRW failed: %s\n", TTF_GetError());
+        SDL_DestroyRenderer(ctx->renderer);
+        SDL_DestroyWindow(ctx->window);
+        plExit();
+        TTF_Quit();
+        SDL_Quit();
+        return false;
+    }
 
     padConfigureInput(1, HidNpadStyleSet_NpadStandard);
     padInitializeDefault(&ctx->pad);
     ctx->needs_redraw = true;
+
+    // Draw initial loading screen
+    set_color(ctx, COL_BG);
+    SDL_RenderClear(ctx->renderer);
+    ui_draw_text_centered(ctx, "NASInstall v2.0", 0, 300, 1280, 28, COL_ACCENT);
+    ui_draw_text_centered(ctx, "Loading...", 0, 360, 1280, 18, COL_TEXT_DIM);
+    SDL_RenderPresent(ctx->renderer);
+
     return true;
 }
 
@@ -40,7 +84,6 @@ void ui_exit(UIContext* ctx) {
     if (ctx->font_small) TTF_CloseFont(ctx->font_small);
     if (ctx->font_large) TTF_CloseFont(ctx->font_large);
     plExit();
-    romfsExit();
     TTF_Quit();
     SDL_Quit();
 }
@@ -168,14 +211,12 @@ bool ui_card(UIContext* ctx, UIRect r, const char* title, const char* subtitle, 
     if (selected) ui_fill_rounded_rect(ctx, r.x - 2, r.y - 2, r.w + 4, r.h + 4, 14, COL_ACCENT_D);
     ui_fill_rounded_rect(ctx, r.x, r.y, r.w, r.h, 12, bg);
 
-    // Server icon
     int icon_r = 18;
     int cx = r.x + 30 + icon_r;
     int cy = r.y + r.h / 2;
     set_color(ctx, COL_ACCENT);
     SDL_Rect icon = {cx - icon_r, cy - icon_r, icon_r * 2, icon_r * 2};
     SDL_RenderFillRect(ctx->renderer, &icon);
-    // NAS icon (simple server stack)
     set_color(ctx, COL_TEXT);
     SDL_RenderDrawRect(ctx->renderer, &(SDL_Rect){cx - 8, cy - 6, 16, 5});
     SDL_RenderDrawRect(ctx->renderer, &(SDL_Rect){cx - 8, cy - 1, 16, 5});
@@ -185,7 +226,6 @@ bool ui_card(UIContext* ctx, UIRect r, const char* title, const char* subtitle, 
     if (subtitle && subtitle[0])
         ui_draw_text(ctx, subtitle, r.x + 66, r.y + 40, 14, COL_TEXT_DIM);
 
-    // Status badge
     if (status && status[0]) {
         int sw = ui_text_width(ctx, status, 14);
         ui_fill_rounded_rect(ctx, r.x + r.w - sw - 40, r.y + r.h / 2 - 14, sw + 24, 28, 14, COL_SUCCESS);
@@ -201,8 +241,8 @@ void ui_progress_bar(UIContext* ctx, UIRect r, float progress) {
 }
 
 void ui_top_bar(UIContext* ctx, const char* title, const char* subtitle) {
-    ui_fill_rect(ctx, 0, 0, SCREEN_WIDTH, TOP_BAR_H, COL_BG);
-    ui_fill_rect(ctx, 0, TOP_BAR_H - 2, SCREEN_WIDTH, 2, COL_ACCENT);
+    ui_fill_rect(ctx, 0, 0, SCREEN_WIDTH, TOP_BAR_H, COL_CARD);
+    ui_fill_rect(ctx, 0, TOP_BAR_H - 3, SCREEN_WIDTH, 3, COL_ACCENT);
     ui_draw_text(ctx, title, PADDING, (TOP_BAR_H - 24) / 2, 24, COL_TEXT);
     if (subtitle && subtitle[0])
         ui_draw_text(ctx, subtitle, PADDING + ui_text_width(ctx, title, 24) + 20, (TOP_BAR_H - 18) / 2 + 4, 14, COL_TEXT_DIM);

@@ -13,7 +13,9 @@
 #include <strings.h>
 
 #define APP_TITLE "NASInstall"
-#define APP_VERSION "2.0.0"
+#define APP_VERSION "2.1.0"
+
+static bool sdl_mode = false;
 
 static void draw_scan(AppContext* app) {
     UIContext* ctx = &app->ui;
@@ -23,7 +25,6 @@ static void draw_scan(AppContext* app) {
     int cx = SCREEN_WIDTH / 2;
     int cy = SCREEN_HEIGHT / 2 - 40;
 
-    // Animated scan circle
     int r = 40 + (app->scan_progress % 30);
     set_color(ctx, COL_ACCENT);
     for (int i = 0; i < 360; i += 5) {
@@ -39,7 +40,6 @@ static void draw_scan(AppContext* app) {
     snprintf(progress, sizeof(progress), "%d / 254 IPs checked", app->scan_progress);
     ui_draw_text_centered(ctx, progress, 0, cy + 110, SCREEN_WIDTH, 14, COL_TEXT_DIM);
 
-    // Progress bar
     UIRect pb = {cx - 200, cy + 150, 400, 8};
     ui_progress_bar(ctx, pb, (float)app->scan_progress / 254.0f);
 
@@ -98,12 +98,10 @@ static void draw_file_browser(AppContext* app) {
             if (sel) ui_fill_rounded_rect(ctx, PADDING - 2, y_start + i * (card_h + 6) - 2, card_w + 4, card_h + 4, 12, COL_ACCENT_D);
             ui_fill_rounded_rect(ctx, PADDING, y_start + i * (card_h + 6), card_w, card_h, 10, bg);
 
-            // File icon
             set_color(ctx, e->is_dir ? COL_WARNING : COL_ACCENT);
             SDL_Rect icon = {PADDING + 16, y_start + i * (card_h + 6) + 20, 24, 24};
             SDL_RenderFillRect(ctx->renderer, &icon);
 
-            // Name
             char display[300];
             const char* prefix = e->is_dir ? "[DIR]  " : "[FILE] ";
             snprintf(display, sizeof(display), "%s%s", prefix, e->name);
@@ -116,7 +114,6 @@ static void draw_file_browser(AppContext* app) {
             }
         }
 
-        // Scroll indicator
         if (app->file_count > visible) {
             char info[64];
             snprintf(info, sizeof(info), "%d / %d files", app->selected_file + 1, app->file_count);
@@ -136,7 +133,6 @@ static void draw_install(AppContext* app) {
     int cx = SCREEN_WIDTH / 2;
     int cy = SCREEN_HEIGHT / 2 - 40;
 
-    // Status text
     const char* stage = "Idle";
     u32 stage_color = COL_TEXT_DIM;
     switch (app->install.status) {
@@ -144,10 +140,10 @@ static void draw_install(AppContext* app) {
         case INSTALLING: stage = "Installing..."; stage_color = COL_WARNING; break;
         case INSTALL_DONE: stage = "Complete!"; stage_color = COL_SUCCESS; break;
         case INSTALL_ERROR: stage = "Error"; stage_color = COL_ERROR; break;
+        default: break;
     }
     ui_draw_text_centered(ctx, stage, 0, cy - 60, SCREEN_WIDTH, 28, stage_color);
 
-    // Progress bar
     UIRect pb = {cx - 250, cy, 500, 20};
     ui_progress_bar(ctx, pb, app->install.progress);
 
@@ -164,12 +160,6 @@ static void draw_install(AppContext* app) {
 
     ui_bottom_bar(ctx, app->install.status == INSTALL_DONE || app->install.status == INSTALL_ERROR ? "B=Back" : "Please wait...");
     ui_present(ctx);
-}
-
-static void handle_scan(AppContext* app, u64 key) {
-    if (key & HidNpadButton_B) {
-        app->state = STATE_SERVER_LIST;
-    }
 }
 
 static void handle_server_list(AppContext* app, u64 key) {
@@ -283,17 +273,35 @@ static void handle_install(AppContext* app, u64 key) {
     }
 }
 
+static void console_main(void) {
+    consoleInit(NULL);
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+    PadState pad;
+    padInitializeDefault(&pad);
+
+    printf("\n\n  NASInstall v" APP_VERSION "\n");
+    printf("  ========================\n\n");
+    printf("  SDL2 initialization failed.\n");
+    printf("  Running in console mode.\n\n");
+    printf("  Press [+] to exit.\n\n");
+
+    while (appletMainLoop()) {
+        padUpdate(&pad);
+        u64 key = padGetButtonsDown(&pad);
+        if (key & HidNpadButton_Plus) break;
+        consoleUpdate(NULL);
+    }
+    consoleExit(NULL);
+}
+
 int main(int argc, char* argv[]) {
     AppContext app;
     memset(&app, 0, sizeof(app));
 
-    if (!ui_init(&app.ui)) {
-        consoleInit(NULL);
-        printf("UI init failed!\n");
-        consoleUpdate(NULL);
-        svcSleepThread(3000000000);
-        consoleExit(NULL);
-        return 1;
+    sdl_mode = ui_init(&app.ui);
+    if (!sdl_mode) {
+        console_main();
+        return 0;
     }
 
     socketInitializeDefault();
@@ -307,7 +315,6 @@ int main(int argc, char* argv[]) {
     app.selected_server = 0;
     app.scroll_offset = 0;
 
-    // Auto-scan on first launch if no saved servers
     if (app.server_count == 0) {
         app.state = STATE_SCAN;
     }
@@ -322,16 +329,12 @@ int main(int argc, char* argv[]) {
             }
         }
 
-        // Handle scan state (blocking scan)
         if (app.state == STATE_SCAN) {
-            // Draw scanning animation
             app.scan_progress = (app.scan_progress + 1) % 255;
             draw_scan(&app);
 
-            // Do actual scan after a few frames of animation
             if (app.scan_progress == 254) {
                 app.server_count = discover_scan(app.servers, MAX_SERVERS);
-                // Also load saved servers
                 SavedServer saved[MAX_SERVERS];
                 int saved_count = 0;
                 config_load(saved, &saved_count, MAX_SERVERS);
@@ -350,7 +353,7 @@ int main(int argc, char* argv[]) {
             if (key & HidNpadButton_B) {
                 app.state = STATE_SERVER_LIST;
             }
-            svcSleepThread(10000000); // 10ms
+            svcSleepThread(10000000);
             continue;
         }
 
