@@ -6,7 +6,7 @@
 #include <string.h>
 #include <math.h>
 
-static void set_color(UIContext* ctx, u32 c) {
+void set_color(UIContext* ctx, u32 c) {
     SDL_SetRenderDrawColor(ctx->renderer, (c >> 16) & 0xFF, (c >> 8) & 0xFF, c & 0xFF, (c >> 24) & 0xFF ? (c >> 24) & 0xFF : 0xFF);
 }
 

@@ -21,6 +21,8 @@
 
 typedef struct { int x, y, w, h; } UIRect;
 
+void set_color(UIContext* ctx, u32 c);
+
 bool ui_init(UIContext* ctx);
 void ui_exit(UIContext* ctx);
 void ui_clear(UIContext* ctx, u32 color);
