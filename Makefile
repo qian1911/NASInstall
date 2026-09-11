@@ -24,7 +24,7 @@ CXXFLAGS	:= $(CFLAGS) -fno-rtti -fno-exceptions
 ASFLAGS	:=	-g $(ARCH)
 LDFLAGS	=	-specs=$(DEVKITPRO)/libnx/switch.specs -g $(ARCH) -Wl,-Map,$(notdir $*.map)
 
-LIBS	:= -lSDL2_ttf -lSDL2 -lharfbuzz -lfreetype -lEGL -lGLESv2 -lglapi -lstdc++ -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lz -lnx -lm
+LIBS	:= -Wl,--start-group -lSDL2_ttf -lSDL2 -lharfbuzz -lfreetype -lEGL -lGLESv2 -lglapi -ldrm_nouveau -lstdc++ -lbz2 -lexpat -lcurl -lmbedtls -lmbedx509 -lmbedcrypto -lpng -ljpeg -lz -lnx -lm -Wl,--end-group
 
 LIBDIRS	:= $(PORTLIBS) $(LIBNX)
 
