@@ -1,0 +1,14 @@
+#ifndef TYPES_H
+#define TYPES_H
+
+typedef enum {
+    STATE_MAIN_MENU = 0,
+    STATE_SERVER_LIST,
+    STATE_FILE_BROWSER,
+    STATE_INSTALL_PROGRESS,
+    STATE_ADD_SERVER,
+    STATE_SETTINGS,
+    STATE_ABOUT
+} AppState;
+
+#endif // TYPES_H

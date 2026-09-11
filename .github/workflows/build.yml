@@ -1,0 +1,34 @@
+name: Build NASInstall NRO
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: devkitpro/devkita64:latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Install dependencies
+      run: |
+        dkp-pacman -Sy --noconfirm switch-curl switch-mbedtls switch-zlib 2>/dev/null || true
+    
+    - name: Build
+      run: |
+        export DEVKITPRO=/opt/devkitpro
+        export DEVKITA64=$DEVKITPRO/devkitA64
+        make -j$(nproc)
+    
+    - name: Upload NRO
+      uses: actions/upload-artifact@v4
+      with:
+        name: NASInstall-NRO
+        path: NASInstall.nro
+        if-no-files-found: error
