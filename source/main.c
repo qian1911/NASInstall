@@ -6,6 +6,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <strings.h>
 #include <switch.h>
 
 #include "types.h"
@@ -51,7 +52,6 @@ static void init(void) {
     socketInitializeDefault();
     nsInitialize();
     ncmInitialize();
-    esInitialize();
     psmInitialize();
 
     config_load();
@@ -73,7 +73,6 @@ static void cleanup(void) {
     install_cleanup(&g_install_task);
 
     psmExit();
-    esExit();
     ncmExit();
     nsExit();
     socketExit();

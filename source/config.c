@@ -2,6 +2,8 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
+#include <sys/types.h>
 
 #define CONFIG_PATH "sdmc:/switch/NASInstall/config.ini"
 #define CONFIG_DIR "sdmc:/switch/NASInstall"
