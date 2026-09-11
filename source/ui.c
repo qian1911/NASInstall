@@ -22,7 +22,7 @@ bool ui_init(UIContext* ctx) {
     SDL_SetHint(SDL_HINT_RENDER_SCALE_QUALITY, "1");
 
     PlFontData font_data;
-    if (R_FAILED(plGetSharedFont(PlSharedFontType_Standard, &font_data))) return false;
+    if (R_FAILED(plGetSharedFontByType(&font_data, PlSharedFontType_Standard))) return false;
 
     ctx->font = TTF_OpenFontRW(SDL_RWFromMem(font_data.address, font_data.size), 0, 18);
     ctx->font_small = TTF_OpenFontRW(SDL_RWFromMem(font_data.address, font_data.size), 0, 14);

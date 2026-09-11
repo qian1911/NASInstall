@@ -7,6 +7,7 @@
 #include <switch.h>
 #include <SDL2/SDL.h>
 #include <SDL2/SDL_ttf.h>
+#include <curl/curl.h>
 #include <stdio.h>
 #include <string.h>
 #include <strings.h>
