@@ -129,14 +129,14 @@ DEPENDS	:=	$(OFILES:.o=.d)
 all	:	$(OUTPUT).nro
 
 ifeq (,$(wildcard $(TOPDIR)/icon.jpg))
-	ICON_ARG :=
+ICON_ARG :=
 else
-	ICON_ARG := --icon=$(TOPDIR)/icon.jpg
+ICON_ARG := --icon=$(TOPDIR)/icon.jpg
 endif
 
 $(OUTPUT).nro	:	$(OUTPUT).elf
 	@echo building $(notdir $@)
-	elf2nro $(OUTPUT).elf $(OUTPUT).nro $(ICON_ARG) --romfsdir=$(TOPDIR)/$(ROMFS)
+	elf2nro $(OUTPUT).elf $(OUTPUT).nro $(ICON_ARG)
 
 $(OUTPUT).elf	:	$(OFILES)
 	@echo linking $(notdir $@)
